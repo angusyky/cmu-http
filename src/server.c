@@ -123,7 +123,7 @@ int handle_http_req(int conn_fd, char *www_folder) {
         size_t filesize = sbuf.st_size;
         sprintf(content_len, "%ld", filesize);
 
-        // mmap logic from 15213 proxy lab
+        // Borrowed mmap logic from 15213 proxy lab
         int file_fd = open(filename, O_RDONLY, 0);
         char *file_buf = mmap(0, filesize, PROT_READ, MAP_PRIVATE, file_fd, 0);
         if (file_buf == MAP_FAILED) {
@@ -139,7 +139,33 @@ int handle_http_req(int conn_fd, char *www_folder) {
     }
 
     if (strncmp(HEAD, req.http_method, 50) == 0) {
-        printf("HEAD CALLED\n");
+
+        // If it doesn't exist, return HTTP 404.
+        if (!lookup(req.http_uri, www_folder)) {
+            printf("Resource %s not found\n", req.http_uri);
+            serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
+            send_msg(conn_fd, msg, msg_len);
+            return 0;
+        }
+
+        // If it exists, return HTTP 200.
+        char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
+        get_filename(filename, req.http_uri, www_folder);
+        get_filetype(filetype, filename);
+        printf("Resource has filename %s with filetype %s\n", filename, filetype);
+
+        // Get file size info
+        struct stat sbuf;
+        if (stat(filename, &sbuf) < 0) {
+            printf("stat %s failed\n", filename);
+            return -1;
+        }
+        size_t filesize = sbuf.st_size;
+        sprintf(content_len, "%ld", filesize);
+
+        // Respond with empty body
+        serialize_http_response(&msg, &msg_len, OK, filetype, content_len, NULL, 0, NULL);
+        send_msg(conn_fd, msg, msg_len);
         return 0;
     }
 
@@ -217,6 +243,7 @@ int main(int argc, char *argv[]) {
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
         if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_fd, &client_len)) > 0) {
             printf("Accepted client fd %d\n", client_fd);
+
             bool added = false;
             fcntl(client_fd, O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
@@ -228,14 +255,18 @@ int main(int argc, char *argv[]) {
                     break;
                 }
             }
+
+            // Return HTTP response 503.
             if (!added) {
                 perror("Max # of connections reached.");
-                // Return HTTP response 503.
+                char *msg;
+                size_t msg_len;
+                serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
+                send_msg(client_fd, msg, msg_len);
             }
         }
 
         // Poll all sockets for events to handle
-//        printf("Polling connections\n");
         poll(open_conns, MAX_OPEN_CONNS, CONNECTION_TIMEOUT);
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
             if (open_conns[i].revents != 0) {
