@@ -1,0 +1,24 @@
+# CLion Directories
+.vscode/
+
+# Object Files
+obj/
+
+# Binaries
+client
+server
+scheduler
+
+# Packet captures
+*.pcap
+
+# Generated Files
+backend/lex.yy.c
+backend/y.tab.c
+backend/y.tab.h
+
+# Python env
+venv/
+
+# Handin
+handin.tar.gz
