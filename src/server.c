@@ -35,6 +35,15 @@
 #define CONNECTION_TIMEOUT 50
 #define PRINT_DBG false
 
+int is_dir(const char *filename) {
+    struct stat sbuf;
+    if (stat(filename, &sbuf) != 0) {
+        perror("stat failed\n");
+        return 0;
+    }
+    return S_ISDIR(sbuf.st_mode);
+}
+
 bool check_version(Request *req) {
     return strcmp(req->http_version, HTTP_VER) == 0;
 }
@@ -107,11 +116,23 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
 
     // HTTP GET
     if (strncmp(GET, req->http_method, 50) == 0) {
+        char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
+
+        // If directory, default to index.html
+        get_filename(filename, req->http_uri, www_folder);
+        if (is_dir(filename)) {
+            size_t uri_len = strlen(req->http_uri);
+            if (req->http_uri[uri_len - 1] == '/') {
+                strcat(req->http_uri, "index.html");
+            } else {
+                strcat(req->http_uri, "/index.html");
+            }
+        }
 
         // Get more information about resource
-        char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
+
         if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
         // Get file size info
@@ -148,11 +169,23 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
 
     // HTTP HEAD
     if (strncmp(HEAD, req->http_method, 50) == 0) {
+        char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
+
+        // If directory, default to index.html
+        get_filename(filename, req->http_uri, www_folder);
+        if (is_dir(filename)) {
+            size_t uri_len = strlen(req->http_uri);
+            if (req->http_uri[uri_len - 1] == '/') {
+                strcat(req->http_uri, "index.html");
+            } else {
+                strcat(req->http_uri, "/index.html");
+            }
+        }
 
         // Get more information about resource
-        char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
+
         if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
         // Get file size info
@@ -322,11 +355,6 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // If uri is directory, return index.html
-                size_t uri_len = strlen(req.http_uri);
-                if (req.http_uri[uri_len - 1] == '/') {
-                    strcat(req.http_uri, "index.html");
-                }
 
                 handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
 
