@@ -48,6 +48,17 @@ int get_content_len(Request *req) {
     return 0;
 }
 
+char *get_content_type(Request *req) {
+    for (int i = 0; i < req->header_count; ++i) {
+        trim_whitespace(req->headers[i].header_name, strlen(req->headers[i].header_name));
+        trim_whitespace(req->headers[i].header_value, strlen(req->headers[i].header_value));
+        if (strcasecmp(req->headers[i].header_name, "Content-Type") == 0) {
+            return req->headers[i].header_value;
+        }
+    }
+    return NULL;
+}
+
 bool check_version(Request *req) {
     trim_whitespace(req->http_version, strlen(req->http_version));
     return strcmp(req->http_version, HTTP_VER) == 0;
@@ -109,6 +120,7 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
         }
         n_written += n;
     }
+    printf("%s\n", msg);
     free(msg);
 }
 
@@ -119,7 +131,7 @@ void send_bad_request(int conn_fd) {
     send_msg(conn_fd, msg, msg_len);
 }
 
-int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf) {
     char *msg;
     size_t msg_len;
     char msg_headers[BUF_SIZE];
@@ -134,7 +146,6 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
             // If it doesn't exist, return HTTP 404.
-            if (PRINT_DBG) printf("stat %s failed\n", filename);
             if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
             serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
             send_msg(conn_fd, msg, msg_len);
@@ -146,7 +157,6 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
             append_dir_default(filename);
             if (stat(filename, &sbuf) < 0) {
                 // If it doesn't exist, return HTTP 404.
-                if (PRINT_DBG) printf("stat %s failed\n", filename);
                 if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
                 serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
                 send_msg(conn_fd, msg, msg_len);
@@ -227,18 +237,13 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
     // HTTP POST
     if (strcasecmp(POST, req->http_method) == 0) {
         // Get content type and length
-        int body_len;
-        char *content_length, *content_type;
-        for (int i = 0; i < req->header_count; ++i) {
-            if (strcasecmp(req->headers[i].header_name, "Content-Length") == 0) {
-                content_length = req->headers[i].header_value;
-                body_len = atoi(req->headers[i].header_value);
-            } else if (strcasecmp(req->headers[i].header_name, "Content-Type") == 0) {
-                content_type = req->headers[i].header_value;
-            }
-        }
+        char content_len[BUF_SIZE];
+        int body_len = get_content_len(req);
+        char *content_type = get_content_type(req);
+        sprintf(content_len, "%ld", body_len + req->status_header_size);
 
-        serialize_http_response(&msg, &msg_len, OK, content_type, content_length, NULL, body_len, body);
+        serialize_http_response(&msg, &msg_len, OK, content_type, content_len, NULL,
+                                body_len + req->status_header_size, recv_buf);
         send_msg(conn_fd, msg, msg_len);
         return 0;
     }
@@ -277,11 +282,15 @@ int main(int argc, char *argv[]) {
     }
 
     // Initialize connection array as all negative (since poll() ignores negatives)
+    char *conn_body[MAX_OPEN_CONNS];
     long conn_timeouts[MAX_OPEN_CONNS];
+    ssize_t conn_bytes_left[MAX_OPEN_CONNS];
     struct pollfd open_conns[MAX_OPEN_CONNS];
     for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
         open_conns[i].fd = -1;
         conn_timeouts[i] = 0;
+        conn_body[i] = NULL;
+        conn_bytes_left[i] = false;
     }
 
     // Set up listener socket
@@ -380,13 +389,12 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // read() first header_size bytes to drain from socket
-                read(conn_fd, recv_buf, req.status_header_size);
-
                 // Get content length to allocate buffer for content length
                 int content_len = get_content_len(&req);
-                read(conn_fd, recv_buf, content_len);
                 if (PRINT_DBG) printf("content length is %d\n", content_len);
+
+                // Drain header_size bytes from socket
+                read(conn_fd, recv_buf, req.status_header_size + content_len);
 
                 // Validate well-formed HTTP request
                 if (!check_version(&req)) {
@@ -402,12 +410,12 @@ int main(int argc, char *argv[]) {
                 }
 
             } else {
-//                // Check timeout
-//                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
-//                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
-//                    open_conns[i].fd = -1;
-//                    close(conn_fd);
-//                }
+                // Check timeout
+                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
+                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
+                    open_conns[i].fd = -1;
+                    close(conn_fd);
+                }
             }
         }
     }
