@@ -33,9 +33,12 @@
 #define MAX_OPEN_CONNS 100
 #define BUF_SIZE 8192
 #define CONNECTION_TIMEOUT 50
+#define PRINT_DBG false
 
 bool check_close(Request *req) {
     for (int i = 0; i < req->header_count; ++i) {
+        trim_whitespace(req->headers[i].header_name, strlen(req->headers[i].header_name));
+        trim_whitespace(req->headers[i].header_value, strlen(req->headers[i].header_value));
         if (strcasecmp(req->headers[i].header_name, CONNECTION_STR) == 0 &&
             strcasecmp(req->headers[i].header_value, CLOSE) == 0) {
             return true;
@@ -88,7 +91,7 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     while (n < msg_len) {
         n += write(conn_fd, msg + n, msg_len - n);
     }
-    // printf("%s\n", msg);
+    if (PRINT_DBG) printf("%s\n", msg);
     free(msg);
 }
 
@@ -103,7 +106,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
 
         // If it doesn't exist, return HTTP 404.
         if (!lookup(req->http_uri, www_folder)) {
-            printf("Resource %s not found\n", req->http_uri);
+            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
             serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
             send_msg(conn_fd, msg, msg_len);
             return 0;
@@ -113,12 +116,12 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
-        printf("Resource has filename %s with filetype %s\n", filename, filetype);
+        if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
         // Get file size info
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
-            printf("stat %s failed\n", filename);
+            if (PRINT_DBG) printf("stat %s failed\n", filename);
             return -1;
         }
         size_t filesize = sbuf.st_size;
@@ -144,7 +147,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
 
         // If it doesn't exist, return HTTP 404.
         if (!lookup(req->http_uri, www_folder)) {
-            printf("Resource %s not found\n", req->http_uri);
+            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
             serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
             send_msg(conn_fd, msg, msg_len);
             return 0;
@@ -154,12 +157,12 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
-        printf("Resource has filename %s with filetype %s\n", filename, filetype);
+        if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
         // Get file size info
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
-            printf("stat %s failed\n", filename);
+            if (PRINT_DBG) printf("stat %s failed\n", filename);
             return -1;
         }
         size_t filesize = sbuf.st_size;
@@ -257,13 +260,13 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    printf("Created listen fd: %d\n", listen_fd);
+    if (PRINT_DBG) printf("Created listen fd: %d\n", listen_fd);
 
     while (true) {
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
         if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
-            printf("Accepted client fd %d\n", client_fd);
+            if (PRINT_DBG) printf("Accepted client fd %d\n", client_fd);
 
             bool added = false;
             fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
@@ -306,7 +309,7 @@ int main(int argc, char *argv[]) {
                 Request req;
                 test_error_code_t err = parse_http_request(recv_buf, n, &req);
                 if (err != TEST_ERROR_NONE) {
-                    printf("conn_fd %d parse request failed\n", conn_fd);
+                    if (PRINT_DBG) printf("conn_fd %d parse request failed\n", conn_fd);
                     char *msg;
                     size_t msg_len;
                     serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
@@ -314,11 +317,12 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // printf("%s\n", recv_buf);
+                if (PRINT_DBG) printf("%s\n", recv_buf);
 
-                // Default uri to index.html
-                if (strcmp(req.http_uri, "/") == 0) {
-                    strcpy(req.http_uri, "/index.html");
+                // If uri is directory, return index.html
+                size_t uri_len = strlen(req.http_uri);
+                if (req.http_uri[uri_len - 1] == '/') {
+                    strcat(req.http_uri, "index.html");
                 }
 
                 handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
