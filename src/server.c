@@ -44,6 +44,17 @@ int is_dir(const char *filename) {
     return S_ISDIR(sbuf.st_mode);
 }
 
+int get_content_len(Request *req) {
+    for (int i = 0; i < req->header_count; ++i) {
+        trim_whitespace(req->headers[i].header_name, strlen(req->headers[i].header_name));
+        trim_whitespace(req->headers[i].header_value, strlen(req->headers[i].header_value));
+        if (strcasecmp(req->headers[i].header_name, CONTENT_LENGTH_STR) == 0) {
+            return atoi(req->headers[i].header_value);
+        }
+    }
+    return 0;
+}
+
 bool check_version(Request *req) {
     return strcmp(req->http_version, HTTP_VER) == 0;
 }
@@ -108,14 +119,14 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     free(msg);
 }
 
-int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char *recv_buf) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf) {
     char *msg;
     size_t msg_len;
     char msg_headers[BUF_SIZE];
     memset(msg_headers, 0, BUF_SIZE);
 
     // HTTP GET
-    if (strncmp(GET, req->http_method, 50) == 0) {
+    if (strcasecmp(GET, req->http_method) == 0) {
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
 
         // If directory, default to index.html
@@ -154,21 +165,27 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
 
         // Borrowed mmap logic from 15213 proxy lab
         int file_fd = open(filename, O_RDONLY, 0);
-        char *file_buf = mmap(0, filesize, PROT_READ, MAP_PRIVATE, file_fd, 0);
-        if (file_buf == MAP_FAILED) {
+        char *file_p = mmap(0, filesize, PROT_READ, MAP_PRIVATE, file_fd, 0);
+        if (file_p == MAP_FAILED) {
             perror("mmap failed");
             close(file_fd);
             return -1;
         }
         close(file_fd);
 
-        serialize_http_response(&msg, &msg_len, OK, filetype, content_len, NULL, filesize, file_buf);
+        serialize_http_response(&msg, &msg_len, OK, filetype, content_len, NULL, filesize, file_p);
         send_msg(conn_fd, msg, msg_len);
+
+        if (munmap(file_p, filesize) < 0) {
+            perror("munmap failed");
+            return -1;
+        }
+
         return 0;
     }
 
     // HTTP HEAD
-    if (strncmp(HEAD, req->http_method, 50) == 0) {
+    if (strcasecmp(HEAD, req->http_method) == 0) {
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
 
         // If directory, default to index.html
@@ -212,7 +229,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
     }
 
     // HTTP POST
-    if (strncmp(POST, req->http_method, 50) == 0) {
+    if (strcasecmp(POST, req->http_method) == 0) {
         // Get content type and length
         int body_len;
         char *content_length, *content_type;
@@ -226,7 +243,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         }
 
         // Set the request body ourselves since the parsing API does not
-        char *body = recv_buf + (n - body_len);
+        char *body = recv_buf + req->status_header_size;
 
         serialize_http_response(&msg, &msg_len, OK, content_type, content_length, NULL, body_len, body);
         send_msg(conn_fd, msg, msg_len);
@@ -335,8 +352,8 @@ int main(int argc, char *argv[]) {
                 int conn_fd = open_conns[i].fd;
 
                 // Try to read from socket
-                size_t n = read(conn_fd, recv_buf, BUF_SIZE);
-                if (n == 0) {
+                ssize_t n = read(conn_fd, recv_buf, BUF_SIZE);
+                if (n <= 0) {
                     close(conn_fd);
                     open_conns[i].fd = -1;
                     continue;
@@ -355,8 +372,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-
-                handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
+                handle_http_req(conn_fd, www_folder, &req, recv_buf);
 
                 // Close connection if client requests it
                 if (check_close(&req)) {
