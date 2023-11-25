@@ -108,15 +108,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
     // HTTP GET
     if (strncmp(GET, req->http_method, 50) == 0) {
 
-        // If it doesn't exist, return HTTP 404.
-        if (!lookup(req->http_uri, www_folder)) {
-            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
-            serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
-            send_msg(conn_fd, msg, msg_len);
-            return 0;
-        }
-
-        // If it exists, return HTTP 200.
+        // Get more information about resource
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
@@ -125,8 +117,16 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         // Get file size info
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
-            if (PRINT_DBG) printf("stat %s failed\n", filename);
-            return -1;
+            // If it doesn't exist, return HTTP 404.
+            if (errno == ENOENT) {
+                if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
+                serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
+                send_msg(conn_fd, msg, msg_len);
+                return 0;
+            } else {
+                if (PRINT_DBG) printf("stat %s failed\n", filename);
+                return -1;
+            }
         }
         size_t filesize = sbuf.st_size;
         sprintf(content_len, "%ld", filesize);
@@ -149,15 +149,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
     // HTTP HEAD
     if (strncmp(HEAD, req->http_method, 50) == 0) {
 
-        // If it doesn't exist, return HTTP 404.
-        if (!lookup(req->http_uri, www_folder)) {
-            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
-            serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
-            send_msg(conn_fd, msg, msg_len);
-            return 0;
-        }
-
-        // If it exists, return HTTP 200.
+        // Get more information about resource
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
         get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
@@ -166,8 +158,16 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         // Get file size info
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
-            if (PRINT_DBG) printf("stat %s failed\n", filename);
-            return -1;
+            // If it doesn't exist, return HTTP 404.
+            if (errno == ENOENT) {
+                if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
+                serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
+                send_msg(conn_fd, msg, msg_len);
+                return 0;
+            } else {
+                if (PRINT_DBG) printf("stat %s failed\n", filename);
+                return -1;
+            }
         }
         size_t filesize = sbuf.st_size;
         sprintf(content_len, "%ld", filesize);
