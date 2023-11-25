@@ -78,7 +78,7 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     while (n < msg_len) {
         n += write(conn_fd, msg + n, msg_len - n);
     }
-    printf("%s\n", msg);
+//    printf("%s\n", msg);
     free(msg);
 }
 
@@ -303,7 +303,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                printf("%s\n", recv_buf);
+//                printf("%s\n", recv_buf);
                 handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
             }
         }
