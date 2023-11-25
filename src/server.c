@@ -363,6 +363,8 @@ int main(int argc, char *argv[]) {
                 char recv_buf[BUF_SIZE];
                 memset(recv_buf, 0, BUF_SIZE);
                 ssize_t n = recv(conn_fd, recv_buf, BUF_SIZE, MSG_PEEK);
+
+                // Close socket if client has closed on their side
                 if (n <= 0) {
                     if (n < 0) perror("read");
                     if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
@@ -370,6 +372,7 @@ int main(int argc, char *argv[]) {
                     close(conn_fd);
                     continue;
                 }
+
                 if (PRINT_DBG) printf("%s\n", recv_buf);
 
                 // Parse read buf into request struct
@@ -402,12 +405,12 @@ int main(int argc, char *argv[]) {
                 }
 
             } else {
-                // Check timeout
-                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
-                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
-                    open_conns[i].fd = -1;
-                    close(conn_fd);
-                }
+//                // Check timeout
+//                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
+//                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
+//                    open_conns[i].fd = -1;
+//                    close(conn_fd);
+//                }
             }
         }
     }
