@@ -278,9 +278,11 @@ int main(int argc, char *argv[]) {
     closedir(www_dir);
 
     // Initialize connection array as all negative (since poll() ignores negatives)
+    long conn_timeouts[MAX_OPEN_CONNS];
     struct pollfd open_conns[MAX_OPEN_CONNS];
     for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
         open_conns[i].fd = -1;
+        conn_timeouts[i] = 0;
     }
 
     // Set up listener socket
@@ -317,6 +319,7 @@ int main(int argc, char *argv[]) {
     if (PRINT_DBG) printf("Created listen fd: %d\n", listen_fd);
 
     while (true) {
+
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
         if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
@@ -326,6 +329,7 @@ int main(int argc, char *argv[]) {
             fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
                 if (open_conns[i].fd < 0) {
+                    conn_timeouts[i] = time(NULL);
                     open_conns[i].fd = client_fd;
                     open_conns[i].events = POLLIN;
                     added = true;
@@ -344,21 +348,26 @@ int main(int argc, char *argv[]) {
         }
 
         // Poll all sockets for events to handle
-        poll(open_conns, MAX_OPEN_CONNS, CONNECTION_TIMEOUT);
+        poll(open_conns, MAX_OPEN_CONNS, 1000);
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
+            int conn_fd = open_conns[i].fd;
             if (open_conns[i].revents & POLLIN) {
-                char recv_buf[BUF_SIZE];
-                memset(recv_buf, 0, BUF_SIZE);
-                int conn_fd = open_conns[i].fd;
+                // Reset timeout
+                conn_timeouts[i] = time(NULL);
 
                 // Try to read from socket
+                char recv_buf[BUF_SIZE];
+                memset(recv_buf, 0, BUF_SIZE);
                 ssize_t n = read(conn_fd, recv_buf, BUF_SIZE);
-                if (n <= 0) {
-                    close(conn_fd);
+                if (n == 0) {
+                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
                     open_conns[i].fd = -1;
+                    close(conn_fd);
+                    continue;
+                } else if (n < 0) {
+                    perror("read");
                     continue;
                 }
-
                 if (PRINT_DBG) printf("%s\n", recv_buf);
 
                 // Parse read buf into request struct and check http version
@@ -376,8 +385,16 @@ int main(int argc, char *argv[]) {
 
                 // Close connection if client requests it
                 if (check_close(&req)) {
-                    close(conn_fd);
                     open_conns[i].fd = -1;
+                    close(conn_fd);
+                }
+
+            } else {
+                // Check timeout
+                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
+                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
+                    open_conns[i].fd = -1;
+                    close(conn_fd);
                 }
             }
         }
