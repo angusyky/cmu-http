@@ -9,6 +9,7 @@
  * without the express permission of the 15-441/641 course staff.
  */
 #include <netinet/in.h>
+#include <signal.h>
 #include <netinet/ip.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -34,15 +35,7 @@
 #define BUF_SIZE 8192
 #define CONNECTION_TIMEOUT 50
 #define PRINT_DBG false
-
-int is_dir(const char *filename) {
-    struct stat sbuf;
-    if (stat(filename, &sbuf) != 0) {
-        perror("stat failed\n");
-        return 0;
-    }
-    return S_ISDIR(sbuf.st_mode);
-}
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
 int get_content_len(Request *req) {
     for (int i = 0; i < req->header_count; ++i) {
@@ -102,11 +95,20 @@ void append_dir_default(char *filename) {
 }
 
 void send_msg(int conn_fd, char *msg, size_t msg_len) {
-    size_t n = 0;
-    while (n < msg_len) {
-        n += write(conn_fd, msg + n, msg_len - n);
+    ssize_t n;
+    ssize_t n_written = 0;
+    while (n_written < msg_len) {
+        int buf_size = MIN(BUF_SIZE, msg_len - n_written);
+        if ((n = write(conn_fd, msg + n_written, buf_size)) < 0) {
+            if (errno == EAGAIN) {
+                continue;
+            } else {
+                perror("write");
+                break;
+            }
+        }
+        n_written += n;
     }
-    if (PRINT_DBG) printf("%s\n", msg);
     free(msg);
 }
 
@@ -114,13 +116,6 @@ void send_bad_request(int conn_fd) {
     char *msg;
     size_t msg_len;
     serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
-    send_msg(conn_fd, msg, msg_len);
-}
-
-void send_unavailable(int conn_fd) {
-    char *msg;
-    size_t msg_len;
-    serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
     send_msg(conn_fd, msg, msg_len);
 }
 
@@ -259,6 +254,8 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in serv_addr, client_addr;
     unsigned int client_len = sizeof(client_addr);
 
+    signal(SIGPIPE, SIG_IGN);
+
     /* Validate and parse args */
     if (argc != 2) {
         fprintf(stderr, "usage: %s <www-folder>\n", argv[0]);
@@ -344,7 +341,10 @@ int main(int argc, char *argv[]) {
             // Return HTTP response 503
             if (!added) {
                 perror("Max # of connections reached.");
-                send_unavailable(client_fd);
+                char *msg;
+                size_t msg_len;
+                serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
+                send_msg(client_fd, msg, msg_len);
             }
         }
 
@@ -364,7 +364,6 @@ int main(int argc, char *argv[]) {
 
                 // Close socket if client has closed on their side
                 if (n <= 0) {
-                    if (n < 0) perror("read");
                     if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
                     open_conns[i].fd = -1;
                     close(conn_fd);
