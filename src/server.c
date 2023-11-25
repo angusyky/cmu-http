@@ -34,6 +34,16 @@
 #define BUF_SIZE 8192
 #define CONNECTION_TIMEOUT 50
 
+bool check_close(Request *req) {
+    for (int i = 0; i < req->header_count; ++i) {
+        if (strcasecmp(req->headers[i].header_name, CONNECTION_STR) == 0 &&
+            strcasecmp(req->headers[i].header_value, CLOSE) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void get_filetype(char *filetype, char *filename) {
     if (strstr(filename, ".html")) {
         strcpy(filetype, HTML_MIME);
@@ -78,7 +88,7 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     while (n < msg_len) {
         n += write(conn_fd, msg + n, msg_len - n);
     }
-//    printf("%s\n", msg);
+    // printf("%s\n", msg);
     free(msg);
 }
 
@@ -167,10 +177,10 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char 
         int body_len;
         char *content_length, *content_type;
         for (int i = 0; i < req->header_count; ++i) {
-            if (strcmp(req->headers[i].header_name, "Content-Length") == 0) {
+            if (strcasecmp(req->headers[i].header_name, "Content-Length") == 0) {
                 content_length = req->headers[i].header_value;
                 body_len = atoi(req->headers[i].header_value);
-            } else if (strcmp(req->headers[i].header_name, "Content-Type") == 0) {
+            } else if (strcasecmp(req->headers[i].header_name, "Content-Type") == 0) {
                 content_type = req->headers[i].header_value;
             }
         }
@@ -250,7 +260,6 @@ int main(int argc, char *argv[]) {
     printf("Created listen fd: %d\n", listen_fd);
 
     while (true) {
-
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
         if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
@@ -285,6 +294,7 @@ int main(int argc, char *argv[]) {
                 memset(recv_buf, 0, BUF_SIZE);
                 int conn_fd = open_conns[i].fd;
 
+                // Try to read from socket
                 size_t n = read(conn_fd, recv_buf, BUF_SIZE);
                 if (n == 0) {
                     close(conn_fd);
@@ -292,6 +302,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
+                // Parse read buf into request struct
                 Request req;
                 test_error_code_t err = parse_http_request(recv_buf, n, &req);
                 if (err != TEST_ERROR_NONE) {
@@ -303,11 +314,20 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-//                printf("%s\n", recv_buf);
+                // printf("%s\n", recv_buf);
+
+                // Default uri to index.html
                 if (strcmp(req.http_uri, "/") == 0) {
                     strcpy(req.http_uri, "/index.html");
                 }
+
                 handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
+
+                // Close connection if client requests it
+                if (check_close(&req)) {
+                    close(conn_fd);
+                    open_conns[i].fd = -1;
+                }
             }
         }
     }
