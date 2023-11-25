@@ -82,27 +82,17 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     free(msg);
 }
 
-int handle_http_req(int conn_fd, char *www_folder) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req) {
     char *msg;
-    Request req;
     size_t msg_len;
-    char recv_buf[BUF_SIZE], msg_headers[BUF_SIZE];
-    memset(recv_buf, 0, BUF_SIZE);
+    char msg_headers[BUF_SIZE];
     memset(msg_headers, 0, BUF_SIZE);
 
-    size_t n = read(conn_fd, recv_buf, BUF_SIZE);
-    test_error_code_t err = parse_http_request(recv_buf, n, &req);
-
-    if (err != TEST_ERROR_NONE) {
-        printf("Parse request failed\n");
-        return -1;
-    }
-
-    if (strncmp(GET, req.http_method, 50) == 0) {
+    if (strncmp(GET, req->http_method, 50) == 0) {
 
         // If it doesn't exist, return HTTP 404.
-        if (!lookup(req.http_uri, www_folder)) {
-            printf("Resource %s not found\n", req.http_uri);
+        if (!lookup(req->http_uri, www_folder)) {
+            printf("Resource %s not found\n", req->http_uri);
             serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
             send_msg(conn_fd, msg, msg_len);
             return 0;
@@ -110,7 +100,7 @@ int handle_http_req(int conn_fd, char *www_folder) {
 
         // If it exists, return HTTP 200.
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
-        get_filename(filename, req.http_uri, www_folder);
+        get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
         printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
@@ -138,11 +128,11 @@ int handle_http_req(int conn_fd, char *www_folder) {
         return 0;
     }
 
-    if (strncmp(HEAD, req.http_method, 50) == 0) {
+    if (strncmp(HEAD, req->http_method, 50) == 0) {
 
         // If it doesn't exist, return HTTP 404.
-        if (!lookup(req.http_uri, www_folder)) {
-            printf("Resource %s not found\n", req.http_uri);
+        if (!lookup(req->http_uri, www_folder)) {
+            printf("Resource %s not found\n", req->http_uri);
             serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
             send_msg(conn_fd, msg, msg_len);
             return 0;
@@ -150,7 +140,7 @@ int handle_http_req(int conn_fd, char *www_folder) {
 
         // If it exists, return HTTP 200.
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
-        get_filename(filename, req.http_uri, www_folder);
+        get_filename(filename, req->http_uri, www_folder);
         get_filetype(filetype, filename);
         printf("Resource has filename %s with filetype %s\n", filename, filetype);
 
@@ -169,12 +159,14 @@ int handle_http_req(int conn_fd, char *www_folder) {
         return 0;
     }
 
-    if (strncmp(POST, req.http_method, 50) == 0) {
+    if (strncmp(POST, req->http_method, 50) == 0) {
         printf("POST CALLED\n");
         return 0;
     }
 
     // HTTP 400
+    serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
+    send_msg(conn_fd, msg, msg_len);
     return 0;
 }
 
@@ -216,7 +208,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (fcntl(listen_fd, O_NONBLOCK) < 0) {
+    if (fcntl(listen_fd, F_SETFL, fcntl(listen_fd, F_GETFL, 0) | O_NONBLOCK) < 0) {
         perror("Failed to set socket as non-blocking");
         exit(EXIT_FAILURE);
     }
@@ -239,24 +231,24 @@ int main(int argc, char *argv[]) {
     printf("Created listen fd: %d\n", listen_fd);
 
     while (true) {
+
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
-        if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_fd, &client_len)) > 0) {
+        if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
             printf("Accepted client fd %d\n", client_fd);
 
             bool added = false;
-            fcntl(client_fd, O_NONBLOCK);
+            fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
                 if (open_conns[i].fd < 0) {
                     open_conns[i].fd = client_fd;
                     open_conns[i].events = POLLIN;
                     added = true;
-                    printf("Added client fd %d to open connections\n", client_fd);
                     break;
                 }
             }
 
-            // Return HTTP response 503.
+            // Return HTTP response 503
             if (!added) {
                 perror("Max # of connections reached.");
                 char *msg;
@@ -269,9 +261,30 @@ int main(int argc, char *argv[]) {
         // Poll all sockets for events to handle
         poll(open_conns, MAX_OPEN_CONNS, CONNECTION_TIMEOUT);
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
-            if (open_conns[i].revents != 0) {
-//                printf("Event at client fd %d\n", open_conns[i].fd);
-                handle_http_req(open_conns[i].fd, www_folder);
+            if (open_conns[i].revents & POLLIN) {
+                char recv_buf[BUF_SIZE];
+                memset(recv_buf, 0, BUF_SIZE);
+                int conn_fd = open_conns[i].fd;
+
+                size_t n = read(conn_fd, recv_buf, BUF_SIZE);
+                if (n == 0) {
+                    close(conn_fd);
+                    open_conns[i].fd = -1;
+                    continue;
+                }
+
+                Request req;
+                test_error_code_t err = parse_http_request(recv_buf, n, &req);
+                if (err != TEST_ERROR_NONE) {
+                    printf("conn_fd %d parse request failed\n", conn_fd);
+                    char *msg;
+                    size_t msg_len;
+                    serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
+                    send_msg(conn_fd, msg, msg_len);
+                    continue;
+                }
+
+                handle_http_req(conn_fd, www_folder, &req);
             }
         }
     }
