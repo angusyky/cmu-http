@@ -56,6 +56,7 @@ int get_content_len(Request *req) {
 }
 
 bool check_version(Request *req) {
+    trim_whitespace(req->http_version, strlen(req->http_version));
     return strcmp(req->http_version, HTTP_VER) == 0;
 }
 
@@ -117,6 +118,13 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     }
     if (PRINT_DBG) printf("%s\n", msg);
     free(msg);
+}
+
+void send_bad_request(int conn_fd) {
+    char *msg;
+    size_t msg_len;
+    serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
+    send_msg(conn_fd, msg, msg_len);
 }
 
 int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf) {
@@ -370,18 +378,20 @@ int main(int argc, char *argv[]) {
                 }
                 if (PRINT_DBG) printf("%s\n", recv_buf);
 
-                // Parse read buf into request struct and check http version
+                // Parse read buf into request struct
                 Request req;
                 test_error_code_t err = parse_http_request(recv_buf, n, &req);
-                if (err != TEST_ERROR_NONE || !check_version(&req)) {
-                    char *msg;
-                    size_t msg_len;
-                    serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
-                    send_msg(conn_fd, msg, msg_len);
+                if (err != TEST_ERROR_NONE) {
+                    send_bad_request(conn_fd);
                     continue;
                 }
 
-                handle_http_req(conn_fd, www_folder, &req, recv_buf);
+                // Validate well-formed HTTP request
+                if (!check_version(&req)) {
+                    send_bad_request(conn_fd);
+                } else {
+                    handle_http_req(conn_fd, www_folder, &req, recv_buf);
+                }
 
                 // Close connection if client requests it
                 if (check_close(&req)) {
