@@ -304,6 +304,9 @@ int main(int argc, char *argv[]) {
                 }
 
 //                printf("%s\n", recv_buf);
+                if (strcmp(req.http_uri, "/") == 0) {
+                    strcpy(req.http_uri, "/index.html");
+                }
                 handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
             }
         }
