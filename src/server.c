@@ -35,6 +35,10 @@
 #define CONNECTION_TIMEOUT 50
 #define PRINT_DBG false
 
+bool check_version(Request *req) {
+    return strcmp(req->http_version, HTTP_VER) == 0;
+}
+
 bool check_close(Request *req) {
     for (int i = 0; i < req->header_count; ++i) {
         trim_whitespace(req->headers[i].header_name, strlen(req->headers[i].header_name));
@@ -305,19 +309,18 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                // Parse read buf into request struct
+                if (PRINT_DBG) printf("%s\n", recv_buf);
+
+                // Parse read buf into request struct and check http version
                 Request req;
                 test_error_code_t err = parse_http_request(recv_buf, n, &req);
-                if (err != TEST_ERROR_NONE) {
-                    if (PRINT_DBG) printf("conn_fd %d parse request failed\n", conn_fd);
+                if (err != TEST_ERROR_NONE || !check_version(&req)) {
                     char *msg;
                     size_t msg_len;
                     serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
                     send_msg(conn_fd, msg, msg_len);
                     continue;
                 }
-
-                if (PRINT_DBG) printf("%s\n", recv_buf);
 
                 // If uri is directory, return index.html
                 size_t uri_len = strlen(req.http_uri);
