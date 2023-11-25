@@ -88,27 +88,17 @@ void get_filetype(char *filetype, char *filename) {
     }
 }
 
-void get_filename(char *filename, char *uri, char *www_folder) {
-    size_t folder_len = strlen(www_folder);
-    size_t uri_len = strlen(uri);
-    strncpy(filename, www_folder, folder_len);
-    strncpy(filename + folder_len, uri + 1, uri_len);
-    filename[folder_len + uri_len - 1] = '\0';
+void get_full_path(char *filename, char *www_folder, char *uri) {
+    snprintf(filename, BUF_SIZE, "%s%s", www_folder, uri);
 }
 
-bool lookup(char *uri, char *www_folder) {
-    DIR *www_dir = opendir(www_folder);
-    if (www_dir == NULL) {
-        return false;
+void append_dir_default(char *filename) {
+    size_t n = strlen(filename);
+    if (filename[n - 1] == '/') {
+        strncat(filename, "index.html", BUF_SIZE);
+    } else {
+        strncat(filename, "/index.html", BUF_SIZE);
     }
-    uri += 1; // Get rid of opening slash
-    struct dirent *entry;
-    while ((entry = readdir(www_dir)) != NULL) {
-        if (strcmp(entry->d_name, uri) == 0)
-            return true;
-    }
-    closedir(www_dir);
-    return false;
 }
 
 void send_msg(int conn_fd, char *msg, size_t msg_len) {
@@ -127,6 +117,13 @@ void send_bad_request(int conn_fd) {
     send_msg(conn_fd, msg, msg_len);
 }
 
+void send_unavailable(int conn_fd) {
+    char *msg;
+    size_t msg_len;
+    serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
+    send_msg(conn_fd, msg, msg_len);
+}
+
 int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
     char *msg;
     size_t msg_len;
@@ -136,40 +133,38 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
     // HTTP GET
     if (strcasecmp(GET, req->http_method) == 0) {
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
+        get_full_path(filename, www_folder, req->http_uri);
 
-        // If directory, default to index.html
-        get_filename(filename, req->http_uri, www_folder);
-        if (is_dir(filename)) {
-            size_t uri_len = strlen(req->http_uri);
-            if (req->http_uri[uri_len - 1] == '/') {
-                strcat(req->http_uri, "index.html");
-            } else {
-                strcat(req->http_uri, "/index.html");
-            }
-        }
-
-        // Get more information about resource
-        get_filename(filename, req->http_uri, www_folder);
-        get_filetype(filetype, filename);
-
-        if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
-
-        // Get file size info
+        // Attempt to stat the filepath
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
             // If it doesn't exist, return HTTP 404.
-            if (errno == ENOENT) {
+            if (PRINT_DBG) printf("stat %s failed\n", filename);
+            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
+            serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
+            send_msg(conn_fd, msg, msg_len);
+            return 0;
+        }
+
+        // File exists, now check if it is a directory and if it has an index.html file
+        if (S_ISDIR(sbuf.st_mode)) {
+            append_dir_default(filename);
+            if (stat(filename, &sbuf) < 0) {
+                // If it doesn't exist, return HTTP 404.
+                if (PRINT_DBG) printf("stat %s failed\n", filename);
                 if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
                 serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
                 send_msg(conn_fd, msg, msg_len);
                 return 0;
-            } else {
-                if (PRINT_DBG) printf("stat %s failed\n", filename);
-                return -1;
             }
         }
+
+        // Get more information about file
+        get_filetype(filetype, filename);
         size_t filesize = sbuf.st_size;
         sprintf(content_len, "%ld", filesize);
+
+        if (PRINT_DBG) printf("Reading resource with filename %s and filetype %s\n", filename, filetype);
 
         // Borrowed mmap logic from 15213 proxy lab
         int file_fd = open(filename, O_RDONLY, 0);
@@ -195,40 +190,38 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
     // HTTP HEAD
     if (strcasecmp(HEAD, req->http_method) == 0) {
         char filename[BUF_SIZE], filetype[BUF_SIZE], content_len[BUF_SIZE];
+        get_full_path(filename, www_folder, req->http_uri);
 
-        // If directory, default to index.html
-        get_filename(filename, req->http_uri, www_folder);
-        if (is_dir(filename)) {
-            size_t uri_len = strlen(req->http_uri);
-            if (req->http_uri[uri_len - 1] == '/') {
-                strcat(req->http_uri, "index.html");
-            } else {
-                strcat(req->http_uri, "/index.html");
-            }
-        }
-
-        // Get more information about resource
-        get_filename(filename, req->http_uri, www_folder);
-        get_filetype(filetype, filename);
-
-        if (PRINT_DBG) printf("Resource has filename %s with filetype %s\n", filename, filetype);
-
-        // Get file size info
+        // Attempt to stat the filepath
         struct stat sbuf;
         if (stat(filename, &sbuf) < 0) {
             // If it doesn't exist, return HTTP 404.
-            if (errno == ENOENT) {
+            if (PRINT_DBG) printf("stat %s failed\n", filename);
+            if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
+            serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
+            send_msg(conn_fd, msg, msg_len);
+            return 0;
+        }
+
+        // File exists, now check if it is a directory and if it has an index.html file
+        if (S_ISDIR(sbuf.st_mode)) {
+            append_dir_default(filename);
+            if (stat(filename, &sbuf) < 0) {
+                // If it doesn't exist, return HTTP 404.
+                if (PRINT_DBG) printf("stat %s failed\n", filename);
                 if (PRINT_DBG) printf("Resource %s not found\n", req->http_uri);
                 serialize_http_response(&msg, &msg_len, NOT_FOUND, NULL, NULL, NULL, 0, NULL);
                 send_msg(conn_fd, msg, msg_len);
                 return 0;
-            } else {
-                if (PRINT_DBG) printf("stat %s failed\n", filename);
-                return -1;
             }
         }
+
+        // Get more information about file
+        get_filetype(filetype, filename);
         size_t filesize = sbuf.st_size;
         sprintf(content_len, "%ld", filesize);
+
+        if (PRINT_DBG) printf("Reading resource with filename %s and filetype %s\n", filename, filetype);
 
         // Respond with empty body
         serialize_http_response(&msg, &msg_len, OK, filetype, content_len, NULL, 0, NULL);
@@ -273,13 +266,18 @@ int main(int argc, char *argv[]) {
     }
 
     char *www_folder = argv[1];
-
     DIR *www_dir = opendir(www_folder);
     if (www_dir == NULL) {
         fprintf(stderr, "Unable to open www folder %s.\n", www_folder);
         return EXIT_FAILURE;
     }
     closedir(www_dir);
+
+    // remove trailing slash
+    size_t folder_len = strlen(www_folder);
+    if (www_folder[folder_len - 1] == '/') {
+        www_folder[folder_len - 1] = '\0';
+    }
 
     // Initialize connection array as all negative (since poll() ignores negatives)
     long conn_timeouts[MAX_OPEN_CONNS];
@@ -327,8 +325,10 @@ int main(int argc, char *argv[]) {
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
         if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
+
             if (PRINT_DBG) printf("Accepted client fd %d\n", client_fd);
 
+            // Search for open connection slot to use
             bool added = false;
             fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
@@ -344,10 +344,7 @@ int main(int argc, char *argv[]) {
             // Return HTTP response 503
             if (!added) {
                 perror("Max # of connections reached.");
-                char *msg;
-                size_t msg_len;
-                serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
-                send_msg(client_fd, msg, msg_len);
+                send_unavailable(client_fd);
             }
         }
 
@@ -356,6 +353,7 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
             int conn_fd = open_conns[i].fd;
             if (open_conns[i].revents & POLLIN) {
+
                 // Reset timeout
                 conn_timeouts[i] = time(NULL);
 
