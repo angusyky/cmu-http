@@ -82,12 +82,13 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
     free(msg);
 }
 
-int handle_http_req(int conn_fd, char *www_folder, Request *req) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req, size_t n, char *recv_buf) {
     char *msg;
     size_t msg_len;
     char msg_headers[BUF_SIZE];
     memset(msg_headers, 0, BUF_SIZE);
 
+    // HTTP GET
     if (strncmp(GET, req->http_method, 50) == 0) {
 
         // If it doesn't exist, return HTTP 404.
@@ -128,6 +129,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req) {
         return 0;
     }
 
+    // HTTP HEAD
     if (strncmp(HEAD, req->http_method, 50) == 0) {
 
         // If it doesn't exist, return HTTP 404.
@@ -159,8 +161,25 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req) {
         return 0;
     }
 
+    // HTTP POST
     if (strncmp(POST, req->http_method, 50) == 0) {
-        printf("POST CALLED\n");
+        // Get content type and length
+        int body_len;
+        char *content_length, *content_type;
+        for (int i = 0; i < req->header_count; ++i) {
+            if (strcmp(req->headers[i].header_name, "Content-Length") == 0) {
+                content_length = req->headers[i].header_value;
+                body_len = atoi(req->headers[i].header_value);
+            } else if (strcmp(req->headers[i].header_name, "Content-Type") == 0) {
+                content_type = req->headers[i].header_value;
+            }
+        }
+
+        // Set the request body ourselves since the parsing API does not
+        char *body = recv_buf + (n - body_len);
+
+        serialize_http_response(&msg, &msg_len, OK, content_type, content_length, NULL, body_len, body);
+        send_msg(conn_fd, msg, msg_len);
         return 0;
     }
 
@@ -284,7 +303,8 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                handle_http_req(conn_fd, www_folder, &req);
+                printf("%s\n", recv_buf);
+                handle_http_req(conn_fd, www_folder, &req, n, recv_buf);
             }
         }
     }
