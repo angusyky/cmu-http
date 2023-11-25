@@ -127,7 +127,7 @@ void send_bad_request(int conn_fd) {
     send_msg(conn_fd, msg, msg_len);
 }
 
-int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req, char *body) {
     char *msg;
     size_t msg_len;
     char msg_headers[BUF_SIZE];
@@ -250,17 +250,13 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf)
             }
         }
 
-        // Set the request body ourselves since the parsing API does not
-        char *body = recv_buf + req->status_header_size;
-
         serialize_http_response(&msg, &msg_len, OK, content_type, content_length, NULL, body_len, body);
         send_msg(conn_fd, msg, msg_len);
         return 0;
     }
 
     // HTTP 400
-    serialize_http_response(&msg, &msg_len, BAD_REQUEST, NULL, NULL, NULL, 0, NULL);
-    send_msg(conn_fd, msg, msg_len);
+    send_bad_request(conn_fd);
     return 0;
 }
 
@@ -363,17 +359,15 @@ int main(int argc, char *argv[]) {
                 // Reset timeout
                 conn_timeouts[i] = time(NULL);
 
-                // Try to read from socket
+                // Peek at socket
                 char recv_buf[BUF_SIZE];
                 memset(recv_buf, 0, BUF_SIZE);
-                ssize_t n = read(conn_fd, recv_buf, BUF_SIZE);
-                if (n == 0) {
+                ssize_t n = recv(conn_fd, recv_buf, BUF_SIZE, MSG_PEEK);
+                if (n <= 0) {
+                    if (n < 0) perror("read");
                     if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
                     open_conns[i].fd = -1;
                     close(conn_fd);
-                    continue;
-                } else if (n < 0) {
-                    perror("read");
                     continue;
                 }
                 if (PRINT_DBG) printf("%s\n", recv_buf);
@@ -385,6 +379,14 @@ int main(int argc, char *argv[]) {
                     send_bad_request(conn_fd);
                     continue;
                 }
+
+                // read() first header_size bytes to drain from socket
+                read(conn_fd, recv_buf, req.status_header_size);
+
+                // Get content length to allocate buffer for content length
+                int content_len = get_content_len(&req);
+                read(conn_fd, recv_buf, content_len);
+                if (PRINT_DBG) printf("content length is %d\n", content_len);
 
                 // Validate well-formed HTTP request
                 if (!check_version(&req)) {
