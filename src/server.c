@@ -146,7 +146,7 @@ void send_bad_request(int conn_fd) {
     send_msg(conn_fd, msg, msg_len);
 }
 
-int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf) {
+int handle_http_req(int conn_fd, char *www_folder, Request *req, request_info *ri) {
     char *msg;
     size_t msg_len;
     char msg_headers[BUF_SIZE];
@@ -255,10 +255,10 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf)
         char content_len[BUF_SIZE];
         int body_len = get_content_len(req);
         char *content_type = get_content_type(req);
-        sprintf(content_len, "%ld", body_len + req->status_header_size);
+        sprintf(content_len, "%d", body_len);
 
-        serialize_http_response(&msg, &msg_len, OK, content_type, content_len, NULL,
-                                body_len + req->status_header_size, recv_buf);
+        serialize_http_response(&msg, &msg_len, OK, content_type, content_len, NULL, body_len,
+                                ri->buf + req->status_header_size);
         send_msg(conn_fd, msg, msg_len);
         return 0;
     }
@@ -431,7 +431,7 @@ int main(int argc, char *argv[]) {
                     if (!check_version(&req)) {
                         send_bad_request(conn_fd);
                     } else {
-                        handle_http_req(conn_fd, www_folder, &req, ri->buf);
+                        handle_http_req(conn_fd, www_folder, &req, ri);
                     }
 
                     // Close connection if client requests it
