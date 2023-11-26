@@ -333,7 +333,7 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    if (listen(listen_fd, MAX_OPEN_CONNS) < 0) {
+    if (listen(listen_fd, 128) < 0) {
         perror("Failed to set socket to listen");
         exit(EXIT_FAILURE);
     }
@@ -344,7 +344,7 @@ int main(int argc, char *argv[]) {
 
         // Accept new connections
         memset(&client_addr, 0, sizeof(struct sockaddr_in));
-        if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
+        while ((client_fd = accept(listen_fd, (struct sockaddr *) &client_addr, &client_len)) > 0) {
 
             if (PRINT_DBG) printf("Accepted client fd %d\n", client_fd);
 
@@ -367,11 +367,12 @@ int main(int argc, char *argv[]) {
                 size_t msg_len;
                 serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
                 send_msg(client_fd, msg, msg_len);
+                close(client_fd);
             }
         }
 
         // Poll all sockets for events to handle
-        poll(open_conns, MAX_OPEN_CONNS, 1000);
+        poll(open_conns, MAX_OPEN_CONNS, 0);
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
             int conn_fd = open_conns[i].fd;
             if (open_conns[i].revents & POLLIN) {
