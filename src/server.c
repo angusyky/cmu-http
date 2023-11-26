@@ -37,6 +37,21 @@
 #define PRINT_DBG false
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 
+typedef struct {
+    size_t total_size;
+    ssize_t n_read;
+    char *buf;
+} request_info;
+
+void reset_req_info(request_info *ri) {
+    if (ri->buf != NULL) {
+        free(ri->buf);
+    }
+    ri->buf = NULL;
+    ri->total_size = 0;
+    ri->n_read = 0;
+}
+
 int get_content_len(Request *req) {
     for (int i = 0; i < req->header_count; ++i) {
         trim_whitespace(req->headers[i].header_name, strlen(req->headers[i].header_name));
@@ -120,7 +135,7 @@ void send_msg(int conn_fd, char *msg, size_t msg_len) {
         }
         n_written += n;
     }
-    printf("%s\n", msg);
+    if (PRINT_DBG) printf("%s\n", msg);
     free(msg);
 }
 
@@ -254,6 +269,7 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, char *recv_buf)
 }
 
 int main(int argc, char *argv[]) {
+    Request req;
     int optval = 1;
     int listen_fd, client_fd;
     struct sockaddr_in serv_addr, client_addr;
@@ -267,6 +283,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    // Validate working directory exists
     char *www_folder = argv[1];
     DIR *www_dir = opendir(www_folder);
     if (www_dir == NULL) {
@@ -275,22 +292,19 @@ int main(int argc, char *argv[]) {
     }
     closedir(www_dir);
 
-    // remove trailing slash
+    // Remove trailing slash
     size_t folder_len = strlen(www_folder);
     if (www_folder[folder_len - 1] == '/') {
         www_folder[folder_len - 1] = '\0';
     }
 
     // Initialize connection array as all negative (since poll() ignores negatives)
-    char *conn_body[MAX_OPEN_CONNS];
-    long conn_timeouts[MAX_OPEN_CONNS];
-    ssize_t conn_bytes_left[MAX_OPEN_CONNS];
+    request_info conn_requests[MAX_OPEN_CONNS];
     struct pollfd open_conns[MAX_OPEN_CONNS];
     for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
         open_conns[i].fd = -1;
-        conn_timeouts[i] = 0;
-        conn_body[i] = NULL;
-        conn_bytes_left[i] = false;
+        conn_requests[i].buf = NULL;
+        reset_req_info(&conn_requests[i]);
     }
 
     // Set up listener socket
@@ -339,7 +353,6 @@ int main(int argc, char *argv[]) {
             fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
                 if (open_conns[i].fd < 0) {
-                    conn_timeouts[i] = time(NULL);
                     open_conns[i].fd = client_fd;
                     open_conns[i].events = POLLIN;
                     added = true;
@@ -362,59 +375,72 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
             int conn_fd = open_conns[i].fd;
             if (open_conns[i].revents & POLLIN) {
-
-                // Reset timeout
-                conn_timeouts[i] = time(NULL);
+                request_info *ri = &conn_requests[i];
 
                 // Peek at socket
+                ssize_t n;
                 char recv_buf[BUF_SIZE];
-                memset(recv_buf, 0, BUF_SIZE);
-                ssize_t n = recv(conn_fd, recv_buf, BUF_SIZE, MSG_PEEK);
+                n = recv(conn_fd, recv_buf, BUF_SIZE, MSG_PEEK);
 
                 // Close socket if client has closed on their side
                 if (n <= 0) {
                     if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
+                    reset_req_info(ri);
                     open_conns[i].fd = -1;
                     close(conn_fd);
                     continue;
                 }
 
-                if (PRINT_DBG) printf("%s\n", recv_buf);
+                // Start new request if none in progress
+                if (ri->buf == NULL) {
 
-                // Parse read buf into request struct
-                Request req;
-                test_error_code_t err = parse_http_request(recv_buf, n, &req);
-                if (err != TEST_ERROR_NONE) {
-                    send_bad_request(conn_fd);
-                    continue;
+                    // Parse read buf into request struct
+                    test_error_code_t err = parse_http_request(recv_buf, n, &req);
+                    if (err == TEST_ERROR_PARSE_PARTIAL) {
+                        if (PRINT_DBG) printf("PARTIAL REQUEST\n");
+                        continue;
+                    }
+
+                    // Get content length to prepare buffer for request
+                    int content_len = get_content_len(&req);
+                    if (PRINT_DBG) printf("content length is %d\n", content_len);
+
+                    ri->total_size = req.status_header_size + content_len;
+                    ri->buf = calloc(ri->total_size, sizeof(char));
+                    ri->n_read = 0;
                 }
 
-                // Get content length to allocate buffer for content length
-                int content_len = get_content_len(&req);
-                if (PRINT_DBG) printf("content length is %d\n", content_len);
-
-                // Drain header_size bytes from socket
-                read(conn_fd, recv_buf, req.status_header_size + content_len);
-
-                // Validate well-formed HTTP request
-                if (!check_version(&req)) {
-                    send_bad_request(conn_fd);
-                } else {
-                    handle_http_req(conn_fd, www_folder, &req, recv_buf);
+                // Request still only partially read
+                if (ri->n_read != ri->total_size) {
+                    n = read(conn_fd, ri->buf + ri->n_read, ri->total_size - ri->n_read);
+                    ri->n_read += n;
                 }
 
-                // Close connection if client requests it
-                if (check_close(&req)) {
-                    open_conns[i].fd = -1;
-                    close(conn_fd);
-                }
+                // Previous partial request is ready
+                if (ri->n_read == ri->total_size) {
 
-            } else {
-                // Check timeout
-                if (open_conns[i].fd > 0 && (time(NULL) - conn_timeouts[i] >= CONNECTION_TIMEOUT)) {
-                    if (PRINT_DBG) printf("closing fd %d\n", conn_fd);
-                    open_conns[i].fd = -1;
-                    close(conn_fd);
+                    // Parse into req struct
+                    test_error_code_t err = parse_http_request(ri->buf, ri->total_size, &req);
+                    if (err != TEST_ERROR_NONE) {
+                        send_bad_request(conn_fd);
+                        reset_req_info(ri);
+                        continue;
+                    }
+
+                    // Validate version
+                    if (!check_version(&req)) {
+                        send_bad_request(conn_fd);
+                    } else {
+                        handle_http_req(conn_fd, www_folder, &req, ri->buf);
+                    }
+
+                    // Close connection if client requests it
+                    if (check_close(&req)) {
+                        open_conns[i].fd = -1;
+                        close(conn_fd);
+                    }
+
+                    reset_req_info(ri);
                 }
             }
         }
