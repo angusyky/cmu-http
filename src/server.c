@@ -350,7 +350,6 @@ int main(int argc, char *argv[]) {
 
             // Search for open connection slot to use
             bool added = false;
-            fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
             for (int i = 0; i < MAX_OPEN_CONNS; ++i) {
                 if (open_conns[i].fd < 0) {
                     open_conns[i].fd = client_fd;
@@ -367,8 +366,10 @@ int main(int argc, char *argv[]) {
                 size_t msg_len;
                 serialize_http_response(&msg, &msg_len, SERVICE_UNAVAILABLE, NULL, NULL, NULL, 0, NULL);
                 send_msg(client_fd, msg, msg_len);
-                close(client_fd);
+                continue;
             }
+
+            fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
         }
 
         // Poll all sockets for events to handle
