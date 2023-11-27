@@ -257,9 +257,9 @@ int handle_http_req(int conn_fd, char *www_folder, Request *req, request_info *r
         char *content_type = get_content_type(req);
         sprintf(content_len, "%d", body_len);
 
-        serialize_http_response(&msg, &msg_len, OK, content_type, content_len, NULL, body_len,
-                                ri->buf + req->status_header_size);
-        send_msg(conn_fd, msg, msg_len);
+        msg = calloc(ri->total_size, sizeof(char));
+        memcpy(msg, ri->buf, ri->total_size);
+        send_msg(conn_fd, msg, ri->total_size);
         return 0;
     }
 
