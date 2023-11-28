@@ -235,8 +235,6 @@ int parse_http_response(Response *response, const char *buf) {
         fprintf(stderr, "Response incomplete\n");
         return -1;
     }
-    response->body = calloc(response->content_length, sizeof(char));
-    memcpy(response->body, body_start, response->content_length); // PROBLEM HERE
 
     const char *content_end = body_start + response->content_length;
     long total_length = ((char *) content_end) - ((char *) buf);
@@ -250,7 +248,6 @@ void print_response(Response *response) {
     printf("Status Code: %d\n", response->status_code);
     printf("Content-Length: %ld\n", response->content_length);
     printf("Total Size: %ld\n", response->total_length);
-    printf("Content: %s\n", response->body);
     printf("\n");
 }
 
@@ -366,14 +363,14 @@ int main(int argc, char *argv[]) {
 
             // If all information is here, save and parse dependency graph
             if (ri->n_read == ri->total_size) {
-                err = parse_http_response(&res, ri->buf);;
+                err = parse_http_response(&res, ri->buf);
                 if (err < 0) {
                     fprintf(stderr, "Fully received response cannot parse correctly!\n");
                     exit(EXIT_FAILURE);
                 }
                 print_response(&res);
                 get_uri_filename(filename, dir_name, ri->uri);
-                write_to_file(filename, res.body, res.content_length);
+                write_to_file(filename, ri->buf + (res.total_length - res.content_length), res.content_length);
                 n_files = process_dependencies(&files, &file_status, &dependencies);
                 reset_res_info(ri);
                 state = FETCHING;
@@ -451,7 +448,7 @@ int main(int argc, char *argv[]) {
                     }
                     print_response(&res);
                     get_uri_filename(filename, dir_name, ri->uri);
-                    write_to_file(filename, res.body, res.content_length);
+                    write_to_file(filename, ri->buf + (res.total_length - res.content_length), res.content_length);
 
                     // Set all dependent files to ready
                     file_status[ri->file_id] = SAVED;
