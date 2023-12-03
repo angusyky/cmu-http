@@ -24,8 +24,14 @@
 #include <fcntl.h>
 
 #define BUF_SIZE 8192
-#define MAX_CONNECTIONS 10
+#define MAX_CONNECTIONS 1
 #define PRINT_DBG false
+
+uint32_t time_ms() {
+    struct timespec time;
+    timespec_get(&time, TIME_UTC);
+    return ((uint32_t)time.tv_sec) * 1000 + ((uint32_t)time.tv_nsec) / 1000000;
+}
 
 typedef enum {
     START = 0, RECV_DEPENDENCY, FETCHING
@@ -306,6 +312,8 @@ int main(int argc, char *argv[]) {
         open_conns[i].events = POLLIN;
     }
 
+    printf("START_TIME %d\n", time_ms());
+
     /* CP1: Send out a HTTP request, waiting for the response */
     while (true) {
         if (state == START) {
@@ -358,7 +366,6 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Fully received response cannot parse correctly!\n");
                     exit(EXIT_FAILURE);
                 }
-                print_response(&res);
                 get_uri_filename(filename, dir_name, ri->uri);
                 write_to_file(filename, ri->buf + (res.total_length - res.content_length), res.content_length);
                 n_files = process_dependencies(&files, &file_status, &dependencies);
@@ -435,7 +442,6 @@ int main(int argc, char *argv[]) {
                         fprintf(stderr, "Fully received response cannot parse correctly!\n");
                         exit(EXIT_FAILURE);
                     }
-                    print_response(&res);
                     get_uri_filename(filename, dir_name, ri->uri);
                     write_to_file(filename, ri->buf + (res.total_length - res.content_length), res.content_length);
 
@@ -459,7 +465,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("Freeing %d files\n", n_files);
+    printf("END_TIME %d\n", time_ms());
+    
     for (int i = 0; i < n_files; ++i) {
         free(files[i]);
     }
