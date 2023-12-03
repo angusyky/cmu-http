@@ -25,7 +25,7 @@
 
 #define BUF_SIZE 8192
 #define MAX_CONNECTIONS 10
-#define PRINT_DBG true
+#define PRINT_DBG false
 
 typedef enum {
     START = 0, RECV_DEPENDENCY, FETCHING
@@ -213,7 +213,7 @@ int parse_http_response(Response *response, const char *buf) {
     char status_message[BUF_SIZE];
 
     // Parse status code and message
-    const char *status_line = strcasestr(buf, "HTTP/1.1");
+    const char *status_line = strstr(buf, "HTTP/1.1");
     if (status_line == NULL) {
         fprintf(stderr, "No status line\n");
         return -1;
@@ -222,7 +222,7 @@ int parse_http_response(Response *response, const char *buf) {
     }
 
     // Parse content length
-    const char *content_length_line = strcasestr(buf, CONTENT_LENGTH);
+    const char *content_length_line = strstr(buf, CONTENT_LENGTH);
     if (content_length_line == NULL) {
         response->content_length = 0;
     } else {
@@ -230,7 +230,7 @@ int parse_http_response(Response *response, const char *buf) {
     }
 
     // Allocate memory for content and copy it
-    const char *body_start = strcasestr(buf, "\r\n\r\n") + 4;
+    const char *body_start = strstr(buf, "\r\n\r\n") + 4;
     if (body_start == NULL) {
         fprintf(stderr, "Response incomplete\n");
         return -1;
