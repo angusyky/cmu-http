@@ -205,10 +205,6 @@ bool all_files_saved(const file_status_t *file_status, int n_files) {
     return true;
 }
 
-int get_conn_id(struct pollfd *open_conns) {
-    return 0;
-}
-
 int parse_http_response(Response *response, const char *buf) {
     char status_message[BUF_SIZE];
 
@@ -268,6 +264,7 @@ int main(int argc, char *argv[]) {
     size_t msg_len;
     char *dir_name = "./www";
     char msg[BUF_SIZE], recv_buf[BUF_SIZE], uri[BUF_SIZE], filename[BUF_SIZE];
+    int conn_idx = 0;
     struct pollfd open_conns[MAX_CONNECTIONS];
     response_info conn_responses[MAX_CONNECTIONS];
     char **files = NULL;
@@ -288,31 +285,31 @@ int main(int argc, char *argv[]) {
         mkdir(dir_name, 0700);
     }
 
-    /* Set up a connection to the HTTP server */
-    int http_sock;
-    struct sockaddr_in http_server;
-    if ((http_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        return TEST_ERROR_HTTP_CONNECT_FAILED;
-    }
 
-    http_server.sin_family = AF_INET;
-    http_server.sin_port = htons(HTTP_PORT);
-    inet_pton(AF_INET, argv[1], &(http_server.sin_addr));
 
-    fprintf(stderr, "Parsed IP address of the server: %X\n", htonl(http_server.sin_addr.s_addr));
-
-    if (connect(http_sock, (struct sockaddr *) &http_server, sizeof(http_server)) < 0) {
-        return TEST_ERROR_HTTP_CONNECT_FAILED;
-    }
-
-    // Initialize data structures
+    // Initialize data structures and connections
     for (int i = 0; i < MAX_CONNECTIONS; ++i) {
+        /* Set up a connection to the HTTP server */
+        int http_sock;
+        struct sockaddr_in http_server;
+        if ((http_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            return TEST_ERROR_HTTP_CONNECT_FAILED;
+        }
+
+        http_server.sin_family = AF_INET;
+        http_server.sin_port = htons(HTTP_PORT);
+        inet_pton(AF_INET, argv[1], &(http_server.sin_addr));
+
+        if (connect(http_sock, (struct sockaddr *) &http_server, sizeof(http_server)) < 0) {
+            return TEST_ERROR_HTTP_CONNECT_FAILED;
+        }
+
         conn_responses[i].uri = NULL;
         conn_responses[i].buf = NULL;
         conn_responses[i].total_size = 0;
         conn_responses[i].n_read = 0;
         conn_responses[i].file_id = -1;
-        open_conns[i].fd = (i == 0) ? http_sock : -1;
+        open_conns[i].fd = http_sock;
         open_conns[i].events = POLLIN;
     }
 
@@ -326,13 +323,13 @@ int main(int argc, char *argv[]) {
             strncpy(req.host, "cmu-http client", 40);
             req.header_count = 0;
             serialize_http_request(msg, &msg_len, &req);
-            send_msg(http_sock, msg, msg_len);
+            send_msg(open_conns[0].fd, msg, msg_len);
             state = RECV_DEPENDENCY;
         }
 
         if (state == RECV_DEPENDENCY) {
             // Peek at socket to receive dependency csv
-            n = recv(http_sock, recv_buf, BUF_SIZE, MSG_PEEK);
+            n = recv(open_conns[0].fd, recv_buf, BUF_SIZE, MSG_PEEK);
 
             // Server closed socket
             if (n <= 0) {
@@ -357,7 +354,7 @@ int main(int argc, char *argv[]) {
 
             // Get the whole dependency response
             if (ri->n_read != ri->total_size) {
-                n = read(http_sock, ri->buf + ri->n_read, ri->total_size - ri->n_read);
+                n = read(open_conns[0].fd, ri->buf + ri->n_read, ri->total_size - ri->n_read);
                 ri->n_read += n;
             }
 
@@ -385,16 +382,16 @@ int main(int argc, char *argv[]) {
         // Check which files we can request
         for (int i = 0; i < n_files; ++i) {
             if (file_status[i] == READY) {
-                int conn_id = get_conn_id(open_conns);
-                int conn_fd = open_conns[conn_id].fd;
+                conn_idx = (conn_idx + 1) % MAX_CONNECTIONS;
+                int conn_fd = open_conns[conn_idx].fd;
 
                 // Temporary measure to skip
-                if (conn_responses[conn_id].uri != NULL)
+                if (conn_responses[conn_idx].uri != NULL)
                     continue;
 
                 snprintf(uri, BUF_SIZE, "/%s", files[i]);
-                conn_responses[conn_id].uri = strdup(uri);
-                conn_responses[conn_id].file_id = i;
+                conn_responses[conn_idx].uri = strdup(uri);
+                conn_responses[conn_idx].file_id = i;
                 request_uri(conn_fd, uri);
                 file_status[i] = REQUESTED;
             }
