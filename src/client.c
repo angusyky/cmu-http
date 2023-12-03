@@ -168,11 +168,6 @@ int process_dependencies(char ***files, file_status_t **file_status, int **depen
         ++i;
     }
 
-//    printf("files\n");
-//    for (int j = 0; j < n_files; ++j) {
-//        printf("%d -> %s", j, (*files)[j]);
-//    }
-
     rewind(file);
 
     // Assign each file to its dependency
@@ -285,8 +280,6 @@ int main(int argc, char *argv[]) {
         mkdir(dir_name, 0700);
     }
 
-
-
     // Initialize data structures and connections
     for (int i = 0; i < MAX_CONNECTIONS; ++i) {
         /* Set up a connection to the HTTP server */
@@ -385,7 +378,6 @@ int main(int argc, char *argv[]) {
                 conn_idx = (conn_idx + 1) % MAX_CONNECTIONS;
                 int conn_fd = open_conns[conn_idx].fd;
 
-                // Temporary measure to skip
                 if (conn_responses[conn_idx].uri != NULL)
                     continue;
 
